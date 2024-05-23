@@ -33,6 +33,16 @@ struct context {
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+#define MAX_NUM_PAGES 32
+struct shm_object{
+	char*pages[MAX_NUM_PAGES];
+	char name[256];
+	int size;
+	int ref_count;
+	int is_mapped;
+};
+
+///#define MAX_SHM_PROC 16
 // Per-process state
 struct proc {
 	uint sz;                     // Size of process memory (bytes)
@@ -48,6 +58,8 @@ struct proc {
 	struct file *ofile[NOFILE];  // Open files
 	struct inode *cwd;           // Current directory
 	char name[16];               // Process name (debugging)
+	//struct shm_object shm_max[MAX_SHM_PROC];
+	struct shm_object *shm_max[16];
 };
 
 // Process memory is laid out contiguously, low addresses first:

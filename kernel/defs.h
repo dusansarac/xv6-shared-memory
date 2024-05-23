@@ -154,6 +154,7 @@ int             argstr(int, char**);
 int             fetchint(uint, int*);
 int             fetchstr(uint, char**);
 void            syscall(void);
+int             mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm);
 
 // timer.c
 void            timerinit(void);

@@ -6,6 +6,9 @@
 #include "proc.h"
 #include "x86.h"
 #include "syscall.h"
+//#include "vm.h"
+#include "fcntl.h"
+#include "spinlock.h"
 
 // User code makes a system call with INT T_SYSCALL.
 // System call number in %eax.
@@ -103,6 +106,10 @@ extern int sys_unlink(void);
 extern int sys_wait(void);
 extern int sys_write(void);
 extern int sys_uptime(void);
+extern int sys_shm_open(void);
+extern int sys_shm_trunc(void);
+extern int sys_shm_map(void);
+extern int sys_shm_close(void);
 
 static int (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -126,7 +133,99 @@ static int (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_shm_open] sys_shm_open,
+[SYS_shm_trunc] sys_shm_trunc,
+[SYS_shm_map] sys_shm_map,
+[SYS_shm_close] sys_shm_close,
 };
+
+#define MAX_SHM_OBJECTS 64
+struct shm_object shm_objects[MAX_SHM_OBJECTS];
+
+int sys_shm_open(void)
+{
+  char *name;
+  struct proc *curproc = myproc();
+  if(argstr(0, &name) < 0)
+    return -1;
+
+  if(strlen(name) == 0) 
+    return -1;
+
+  int s = 0;
+  for (int i =0 ; i<16;i++){
+    if(curproc->shm_max[i]!=0){
+      s++;
+    }
+  }
+  if(s>=16){
+    return -1;
+  }
+  for(int i = 0; i < MAX_SHM_OBJECTS; i++) {
+    if(shm_objects[i].name[0] != 0 && strncmp(shm_objects[i].name, name, strlen(shm_objects[i].name)) == 0) {
+      shm_objects[i].ref_count++;
+      for(int i = 0 ; i<16;i++){
+        if(curproc->shm_max[i]==0){
+          curproc->shm_max[i] = &shm_objects[i];
+          break;
+        }
+      }
+      return i; 
+    }
+  }
+  for(int i = 0; i < MAX_SHM_OBJECTS; i++) {
+    if(shm_objects[i].name[0] == 0) {
+      strncpy(shm_objects[i].name, name, 256);
+      shm_objects[i].size = 0;
+      shm_objects[i].ref_count = 1;
+      for(int i = 0 ; i<16;i++){
+        if(curproc->shm_max[i]==0){
+          curproc->shm_max[i] = &shm_objects[i];
+          break;
+        }
+      }
+      return i; 
+    }
+  }
+  return -1;
+}
+
+int sys_shm_trunc(void)
+{
+  return -1;
+}
+
+int sys_shm_map(void)
+{
+  
+    return -1;
+}
+int sys_shm_close(void)
+{
+  
+    int fd;
+    struct proc *curproc = myproc();
+    if(argint(0, &fd) < 0)
+        return -1;
+
+    if(fd < 0 || fd >= MAX_SHM_OBJECTS || shm_objects[fd].name[0] == 0)
+        return -1;
+
+    shm_objects[fd].ref_count--;
+    curproc->shm_max[fd] = 0;
+
+    if(shm_objects[fd].ref_count == 0) {
+        for (int i = 0; i < 32; i++) {
+            if (shm_objects[fd].pages[i] != 0) {
+                kfree(shm_objects[fd].pages[i]);
+                shm_objects[fd].pages[i] = 0;
+            }
+        }
+        shm_objects[fd].name[0] = 0;
+    }
+    return 0;
+    
+}
 
 void
 syscall(void)
