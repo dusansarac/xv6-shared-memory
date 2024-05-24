@@ -8,7 +8,6 @@
 #include "syscall.h"
 //#include "vm.h"
 #include "fcntl.h"
-#include "spinlock.h"
 
 // User code makes a system call with INT T_SYSCALL.
 // System call number in %eax.
@@ -20,9 +19,9 @@
 int
 fetchint(uint addr, int *ip)
 {
-	struct proc *curproc = myproc();
+	struct proc *currproc = myproc();
 
-	if(addr >= curproc->sz || addr+4 > curproc->sz)
+	if(addr >= currproc->sz || addr+4 > currproc->sz)
 		return -1;
 	*ip = *(int*)(addr);
 	return 0;
@@ -35,12 +34,12 @@ int
 fetchstr(uint addr, char **pp)
 {
 	char *s, *ep;
-	struct proc *curproc = myproc();
+	struct proc *currproc = myproc();
 
-	if(addr >= curproc->sz)
+	if(addr >= currproc->sz)
 		return -1;
 	*pp = (char*)addr;
-	ep = (char*)curproc->sz;
+	ep = (char*)currproc->sz;
 	for(s = *pp; s < ep; s++){
 		if(*s == 0)
 			return s - *pp;
@@ -62,11 +61,11 @@ int
 argptr(int n, char **pp, int size)
 {
 	int i;
-	struct proc *curproc = myproc();
+	struct proc *currproc = myproc();
 
 	if(argint(n, &i) < 0)
 		return -1;
-	if(size < 0 || (uint)i >= curproc->sz || (uint)i+size > curproc->sz)
+	if(size < 0 || (uint)i >= currproc->sz || (uint)i+size > currproc->sz)
 		return -1;
 	*pp = (char*)i;
 	return 0;
@@ -145,7 +144,7 @@ struct shm_object shm_objects[MAX_SHM_OBJECTS];
 int sys_shm_open(void)
 {
   char *name;
-  struct proc *curproc = myproc();
+  struct proc *currproc = myproc();
   if(argstr(0, &name) < 0)
     return -1;
 
@@ -154,33 +153,30 @@ int sys_shm_open(void)
 
   int s = 0;
   for (int i =0 ; i<16;i++){
-    if(curproc->shm_max[i]!=0){
+    if(currproc->shm_max[i]!=0){
       s++;
     }
   }
-  if(s>=16){
-    return -1;
-  }
   for(int i = 0; i < MAX_SHM_OBJECTS; i++) {
     if(shm_objects[i].name[0] != 0 && strncmp(shm_objects[i].name, name, strlen(shm_objects[i].name)) == 0) {
-      shm_objects[i].ref_count++;
       for(int i = 0 ; i<16;i++){
-        if(curproc->shm_max[i]==0){
-          curproc->shm_max[i] = &shm_objects[i];
+        if(currproc->shm_max[i]==0){
+          currproc->shm_max[i] = &shm_objects[i];
+          shm_objects[i].ref_count++;
           break;
-        }
+        } 
       }
       return i; 
     }
   }
   for(int i = 0; i < MAX_SHM_OBJECTS; i++) {
     if(shm_objects[i].name[0] == 0) {
-      strncpy(shm_objects[i].name, name, 256);
-      shm_objects[i].size = 0;
-      shm_objects[i].ref_count = 1;
       for(int i = 0 ; i<16;i++){
-        if(curproc->shm_max[i]==0){
-          curproc->shm_max[i] = &shm_objects[i];
+        if(currproc->shm_max[i]==0){
+          currproc->shm_max[i] = &shm_objects[i];
+          strncpy(shm_objects[i].name, name, 256);
+          shm_objects[i].size = 0;
+          shm_objects[i].ref_count = 1;
           break;
         }
       }
@@ -192,19 +188,69 @@ int sys_shm_open(void)
 
 int sys_shm_trunc(void)
 {
-  return -1;
+ 
+  int fd, size;
+  if(argint(0, &fd) < 0 || argint(1, &size) < 0)
+    return -1;
+  
+  if(fd < 0 || shm_objects[fd].name[0] == 0 || fd >= MAX_SHM_OBJECTS)
+    return -1;
+
+  if(size <= 0)
+    return -1;
+
+  if(shm_objects[fd].size != 0)
+    return -1;
+
+  //int num_pages = PGROUNDUP(size);
+  int num_pages = (size + PGSIZE - 1) / PGSIZE;
+  
+  for(int i=0; i<num_pages; i++)
+  {
+    shm_objects[fd].pages[i] = kalloc();
+    if(shm_objects[fd].pages[i] == 0)
+    {
+      for(int j = 0; j < i; j++){
+      kfree(shm_objects[fd].pages[j]);
+    }
+    return -1;
+    }
+    memset(shm_objects[fd].pages[i], 0, PGSIZE);
+  }
+  shm_objects[fd].size = PGSIZE*num_pages;
+  return shm_objects[fd].size;
+    
 }
 
 int sys_shm_map(void)
 {
-  
+  int fd, addr;
+  struct proc *currproc = myproc();
+
+  if(argint(0, &fd) < 0 || argint(1, &addr) < 0)
     return -1;
+
+  int num_pages = (shm_objects[fd].size + PGSIZE - 1) / PGSIZE;
+ 
+  if(shm_objects[fd].name[0] == 0 || fd >= MAX_SHM_OBJECTS || fd < 0)
+    return -1;
+
+  for(int i = 0; i < num_pages; i++) {
+    pte_t *pte = walkpgdir(currproc->pgdir, (void *)(addr + i * PGSIZE), 0);
+    if((*pte & PTE_P)&&pte)
+      return -1;
+  }
+
+  if(mappages(currproc->pgdir, (void *)addr, num_pages * PGSIZE, V2P(shm_objects[fd].pages[0]), PTE_W | PTE_U) < 0)
+    return -1;
+
+  return 1;
 }
+
 int sys_shm_close(void)
 {
-  
     int fd;
-    struct proc *curproc = myproc();
+    struct proc *currproc = myproc();
     if(argint(0, &fd) < 0)
         return -1;
 
@@ -212,7 +258,7 @@ int sys_shm_close(void)
         return -1;
 
     shm_objects[fd].ref_count--;
-    curproc->shm_max[fd] = 0;
+    currproc->shm_max[fd] = 0;
 
     if(shm_objects[fd].ref_count == 0) {
         for (int i = 0; i < 32; i++) {
@@ -231,14 +277,14 @@ void
 syscall(void)
 {
 	int num;
-	struct proc *curproc = myproc();
+	struct proc *currproc = myproc();
 
-	num = curproc->tf->eax;
+	num = currproc->tf->eax;
 	if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-		curproc->tf->eax = syscalls[num]();
+		currproc->tf->eax = syscalls[num]();
 	} else {
 		cprintf("%d %s: unknown sys call %d\n",
-			curproc->pid, curproc->name, num);
-		curproc->tf->eax = -1;
+			currproc->pid, currproc->name, num);
+		currproc->tf->eax = -1;
 	}
 }
